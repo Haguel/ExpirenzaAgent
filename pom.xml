@@ -11,8 +11,8 @@
     <groupId>dev.haguel</groupId>
     <artifactId>expirenza_agent</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>expirenza_crawler</name>
-    <description>expirenza_crawler</description>
+    <name>expirenza_agent</name>
+    <description>expirenza_agent</description>
     <url/>
     <licenses>
         <license/>
