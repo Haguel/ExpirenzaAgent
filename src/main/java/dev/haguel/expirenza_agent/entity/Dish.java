@@ -11,7 +11,7 @@ import java.math.BigDecimal;
 @Getter
 public class Dish {
     private String name;
-    private Category category;
+    private DishCategory dishCategory;
     private String description;
     private BigDecimal price;
 }

@@ -7,7 +7,7 @@ import lombok.Getter;
 @AllArgsConstructor
 @Getter
 @Builder
-public class Category {
+public class DishCategory {
     private final String category;
     private final String subCategory;
 }
