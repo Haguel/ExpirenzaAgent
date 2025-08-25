@@ -1,7 +1,6 @@
 package dev.haguel.expirenza_agent.main.impl;
 
-import dev.haguel.expirenza_agent.entity.Dish;
-import dev.haguel.expirenza_agent.entity.Restaraunt;
+import dev.haguel.expirenza_agent.entity.Restaurant;
 import dev.haguel.expirenza_agent.exception.InvalidParseException;
 import dev.haguel.expirenza_agent.main.*;
 import dev.haguel.expirenza_agent.utils.ExecutorUtil;
@@ -10,17 +9,18 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
 @Component
 @RequiredArgsConstructor
 public class Agent implements Scheduler {
-    private final DataExporter<Restaraunt> exporter;
-    private final ItemsBufferProducer<String> itemsBufferProducer;
-    private final ItemsBufferParser<String, Restaraunt> itemsBufferParser;
+    private final DataExporter<Restaurant> exporter;
+    private final ItemParser<String, Restaurant> itemParser;
+
+    private ItemProducer<LinkedBlockingQueue<String>, String> itemProducer;
+
+    private BlockingQueue<String> urlsQueue;
+    private BlockingQueue<Restaurant> restaurantsQueue;
 
     private ExecutorService producerExecutor;
     private ExecutorService parserExecutor;
@@ -34,7 +34,7 @@ public class Agent implements Scheduler {
         int threadsPerProcess = (int) Math.ceil((double) availableThreadsCount / processesCount);
 
         producerExecutor = Executors.newSingleThreadExecutor();
-        parserExecutor = Executors.newFixedThreadPool(threadsPerProcess + 1); // needs more threads
+        parserExecutor = Executors.newFixedThreadPool(threadsPerProcess * 2); // needs more threads
         exporterExecutor = Executors.newFixedThreadPool(threadsPerProcess);
 
         ExecutorUtil.addShutdownHook(producerExecutor);
@@ -45,20 +45,52 @@ public class Agent implements Scheduler {
     @PostConstruct
     public void init() {
         setupExecutors();
+        urlsQueue = new LinkedBlockingQueue<>();
+        restaurantsQueue = new LinkedBlockingQueue<>();
     }
 
     @Override
     @Scheduled(fixedRate = 1000 * 60 * 3)
     public void schedule() {
-        CompletableFuture
-                .runAsync(itemsBufferProducer::produceItemsToBuffer, producerExecutor)
-                .thenApplyAsync((Void) -> {
-                    try {
-                        return itemsBufferParser.parseItemFromBuffer();
-                    } catch (InvalidParseException e) {
-                        throw new RuntimeException(e);
-                    }
-                }, parserExecutor)
-                .thenAcceptAsync(exporter::export, exporterExecutor);
+        itemProducer = new ExpirenzaMenuURLProducer();
+        producerExecutor.submit(this::produce);
+    }
+
+    private void produce() {
+        String url = itemProducer.produce();
+        if(url != null) {
+            try {
+                urlsQueue.put(url);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+
+            parserExecutor.submit(this::parse);
+
+            produce();
+        }
+    }
+
+    private void parse() {
+        try {
+            String url = urlsQueue.take();
+            Restaurant restaurant = itemParser.parse(url);
+            restaurantsQueue.put(restaurant);
+        } catch (InvalidParseException e) {
+            System.err.println("An error occurred during the parsing of the restaurant: " + e.getMessage());
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
+        exporterExecutor.submit(this::export);
+    }
+
+    private void export() {
+        try {
+            Restaurant restaurant = restaurantsQueue.take();
+            exporter.export(restaurant);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 }
