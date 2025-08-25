@@ -1,6 +1,7 @@
 package dev.haguel.expirenza_agent.main.impl;
 
 import dev.haguel.expirenza_agent.entity.Dish;
+import dev.haguel.expirenza_agent.entity.Restaraunt;
 import dev.haguel.expirenza_agent.exception.InvalidParseException;
 import dev.haguel.expirenza_agent.main.*;
 import dev.haguel.expirenza_agent.utils.ExecutorUtil;
@@ -17,9 +18,9 @@ import java.util.concurrent.Executors;
 @Component
 @RequiredArgsConstructor
 public class Agent implements Scheduler {
-    private final DataExporter<List<Dish>> exporter;
+    private final DataExporter<Restaraunt> exporter;
     private final ItemsBufferProducer<String> itemsBufferProducer;
-    private final ItemsBufferParser<String, List<Dish>> itemsBufferParser;
+    private final ItemsBufferParser<String, Restaraunt> itemsBufferParser;
 
     private ExecutorService producerExecutor;
     private ExecutorService parserExecutor;
@@ -53,7 +54,7 @@ public class Agent implements Scheduler {
                 .runAsync(itemsBufferProducer::produceItemsToBuffer, producerExecutor)
                 .thenApplyAsync((Void) -> {
                     try {
-                        return itemsBufferParser.parseItemsFromBuffer();
+                        return itemsBufferParser.parseItemFromBuffer();
                     } catch (InvalidParseException e) {
                         throw new RuntimeException(e);
                     }

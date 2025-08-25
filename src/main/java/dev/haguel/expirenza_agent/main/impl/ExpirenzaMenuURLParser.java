@@ -2,6 +2,7 @@ package dev.haguel.expirenza_agent.main.impl;
 
 import dev.haguel.expirenza_agent.entity.DishCategory;
 import dev.haguel.expirenza_agent.entity.Dish;
+import dev.haguel.expirenza_agent.entity.Restaraunt;
 import dev.haguel.expirenza_agent.exception.InvalidParseException;
 import dev.haguel.expirenza_agent.main.ItemsBuffer;
 import dev.haguel.expirenza_agent.main.ItemsBufferParser;
@@ -26,16 +27,22 @@ import java.util.List;
 
 
 @Component
-public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>> {
+public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, Restaraunt> {
+    private final Restaraunt.RestarauntBuilder restarauntBuilder;
+    private final List<Dish> dishList;
+    private final WebDriverKit webDriverKit;
+
     public ExpirenzaMenuURLParser(ItemsBuffer<String> itemsBuffer) {
         super(itemsBuffer);
+        restarauntBuilder = Restaraunt.builder();
+        dishList = new ArrayList<>();
+        webDriverKit = setupWebDriverKit();
     }
 
     @Override
-    public List<Dish> parseItemsFromBuffer() throws InvalidParseException {
+    public Restaraunt parseItemFromBuffer() throws InvalidParseException {
         String url = itemsBuffer.take();
-        WebDriverKit webDriverKit = setupWebDriverKit();
-        return parseExpirenzaMenuFromUrl(url, webDriverKit);
+        return parseExpirenzaMenuRestaurantFromUrl(url);
     }
 
     private record PageCategory(String name, String link){}
@@ -49,12 +56,11 @@ public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>
         return new WebDriverKit(driver, webDriverWait);
     }
 
-    private List<Dish> parseExpirenzaMenuFromUrl(String baseUrl, WebDriverKit webDriverKit) throws InvalidParseException {
-        List<Dish> dishes = new ArrayList<>();
 
+    private Restaraunt parseExpirenzaMenuRestaurantFromUrl(String baseUrl) throws InvalidParseException {
         try {
             webDriverKit.webDriver.get(baseUrl);
-            parseDishesFromWebDriverKit(webDriverKit, dishes);
+            parseRestaurantForDishes();
         } catch (WebDriverException exception) {
             System.err.println("An error occurred during the Selenium execution.");
             exception.printStackTrace();
@@ -62,21 +68,31 @@ public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>
             if (webDriverKit.webDriver != null) webDriverKit.webDriver.quit();
         }
 
-        return dishes;
+        restarauntBuilder.dishes(dishList);
+        return restarauntBuilder.build();
     }
 
-    private void parseDishesFromWebDriverKit(WebDriverKit webDriverKit, List<Dish> dishes) throws InvalidParseException {
-        List<WebElement> menuLinks = findMenuLinksElements(webDriverKit);
+
+    private void parseRestaurantForDishes() throws InvalidParseException {
+        parseAndSetRestaurantName();
+        List<WebElement> menuLinks = findMenuLinksElements();
         List<PageCategory> categories = getCategoriesFromMenuLinks(menuLinks);
 
         if (categories.isEmpty()) throw new InvalidParseException("Categories are empty");
         for (PageCategory pageCategory : categories) {
-            parseDishesFromPageCategory(pageCategory, webDriverKit, dishes);
+            parseDishesFromPageCategory(pageCategory);
         }
     }
 
+    private void parseAndSetRestaurantName() {
+        By restaurantTitle = By.cssSelector("h2.title");
+        webDriverKit.webDriverWait.until(ExpectedConditions.visibilityOfElementLocated(restaurantTitle));
+        WebElement element = webDriverKit.webDriver.findElement(restaurantTitle);
 
-    private List<WebElement> findMenuLinksElements(WebDriverKit webDriverKit) {
+        restarauntBuilder.name(element.getText().trim());
+    }
+
+    private List<WebElement> findMenuLinksElements() {
         By menuLinkSelector = By.cssSelector("a.main-menu-item");
         webDriverKit.webDriverWait.until(ExpectedConditions.visibilityOfElementLocated(menuLinkSelector));
 
@@ -94,20 +110,20 @@ public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>
         return categories;
     }
 
-    private void parseDishesFromPageCategory(PageCategory pageCategory, WebDriverKit webDriverKit, List<Dish> dishes) {
+    private void parseDishesFromPageCategory(PageCategory pageCategory) {
         String mainCategory = pageCategory.name();
         String categoryUrl = pageCategory.link();
-        Document categoryDocument = getCategoryHTMLDocument(webDriverKit, categoryUrl);
+        Document categoryDocument = getCategoryHTMLDocument(categoryUrl);
         Elements subCategoryElements = categoryDocument.select("h2.dish-list--title");
 
         if (subCategoryElements.isEmpty()) {
-            addDishesToList(categoryDocument.select("div.menu-list-item"), mainCategory, null, dishes);
+            addDishesToDishList(categoryDocument.select("div.menu-list-item"), mainCategory, null);
         } else {
-            addCategoryDishesToList(mainCategory, subCategoryElements, dishes);
+            addDishesFromCategoryToDishList(mainCategory, subCategoryElements);
         }
     }
 
-    private Document getCategoryHTMLDocument(WebDriverKit webDriverKit, String categoryUrl) {
+    private Document getCategoryHTMLDocument(String categoryUrl) {
         webDriverKit.webDriver.get(categoryUrl);
 
         By dishSelector = By.cssSelector("div.menu-list-item");
@@ -117,7 +133,7 @@ public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>
         return Jsoup.parse(pageSource);
     }
 
-    private void addCategoryDishesToList(String mainCategory, Elements subCategoryElements, List<Dish> dishes) {
+    private void addDishesFromCategoryToDishList(String mainCategory, Elements subCategoryElements) {
         for (Element subCategoryElement : subCategoryElements) {
             String subCategory = subCategoryElement.text().trim();
             Element nextElementAfterSubCategory = subCategoryElement.nextElementSibling();
@@ -128,7 +144,7 @@ public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>
                 nextElementAfterSubCategory = nextElementAfterSubCategory.nextElementSibling();
             }
 
-            addDishesToList(new Elements(dishElements), mainCategory, subCategory, dishes);
+            addDishesToDishList(new Elements(dishElements), mainCategory, subCategory);
         }
     }
 
@@ -136,7 +152,7 @@ public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>
         return element != null && !element.tagName().equals("h2") && !element.hasClass("dish-list--title");
     }
 
-    private void addDishesToList(Elements dishElements, String mainCategory, String subCategory, List<Dish> dishes) {
+    private void addDishesToDishList(Elements dishElements, String mainCategory, String subCategory) {
         for (Element dishElement : dishElements) {
             Element nameElement = dishElement.selectFirst("h4.item-title");
             String name = nameElement != null ? nameElement.text().trim() : "NO NAME";
@@ -160,7 +176,7 @@ public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, List<Dish>
                     .price(price)
                     .build();
 
-            dishes.add(dish);
+            dishList.add(dish);
         }
     }
 

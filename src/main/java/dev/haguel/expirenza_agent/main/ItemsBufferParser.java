@@ -7,5 +7,5 @@ import lombok.RequiredArgsConstructor;
 public abstract class ItemsBufferParser<T, V> {
     protected final ItemsBuffer<T> itemsBuffer;
 
-    public abstract V parseItemsFromBuffer() throws InvalidParseException;
+    public abstract V parseItemFromBuffer() throws InvalidParseException;
 }
