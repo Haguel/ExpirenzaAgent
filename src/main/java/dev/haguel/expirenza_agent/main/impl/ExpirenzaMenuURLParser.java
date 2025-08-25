@@ -1,12 +1,12 @@
 package dev.haguel.expirenza_agent.main.impl;
 
-import dev.haguel.expirenza_agent.entity.DishCategory;
 import dev.haguel.expirenza_agent.entity.Dish;
-import dev.haguel.expirenza_agent.entity.Restaraunt;
+import dev.haguel.expirenza_agent.entity.DishCategory;
+import dev.haguel.expirenza_agent.entity.Restaurant;
 import dev.haguel.expirenza_agent.exception.InvalidParseException;
-import dev.haguel.expirenza_agent.main.ItemsBuffer;
-import dev.haguel.expirenza_agent.main.ItemsBufferParser;
+import dev.haguel.expirenza_agent.main.ItemParser;
 import io.github.bonigarcia.wdm.WebDriverManager;
+import jakarta.annotation.PreDestroy;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -14,8 +14,8 @@ import org.jsoup.select.Elements;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebDriverException;
-import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.springframework.stereotype.Component;
@@ -23,177 +23,142 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Component
-public class ExpirenzaMenuURLParser extends ItemsBufferParser<String, Restaraunt> {
-    private final Restaraunt.RestarauntBuilder restarauntBuilder;
-    private final List<Dish> dishList;
-    private final WebDriverKit webDriverKit;
+public class ExpirenzaMenuURLParser implements ItemParser<String, Restaurant> {
 
-    public ExpirenzaMenuURLParser(ItemsBuffer<String> itemsBuffer) {
-        super(itemsBuffer);
-        restarauntBuilder = Restaraunt.builder();
-        dishList = new ArrayList<>();
-        webDriverKit = setupWebDriverKit();
-    }
+    private final List<WebDriverKit> allDrivers = Collections.synchronizedList(new ArrayList<>());
+    private final ThreadLocal<WebDriverKit> driverThreadLocal = ThreadLocal.withInitial(this::createWebDriverKit);
+
+    private record PageCategory(String name, String url) {}
+    private record WebDriverKit(WebDriver webDriver, WebDriverWait webDriverWait) {}
 
     @Override
-    public Restaraunt parseItemFromBuffer() throws InvalidParseException {
-        String url = itemsBuffer.take();
-        return parseExpirenzaMenuRestaurantFromUrl(url);
+    public Restaurant parse(String url) throws InvalidParseException {
+        return scrapeRestaurantData(driverThreadLocal.get(), url);
     }
 
-    private record PageCategory(String name, String link){}
+    @PreDestroy
+    public void cleanup() {
+        for (WebDriverKit kit : allDrivers) {
+            try {
+                kit.webDriver.quit();
+            } catch (Exception e) {
+                System.err.println("Error quitting a WebDriver instance: " + e.getMessage());
+            }
+        }
+    }
 
-    private record WebDriverKit(WebDriver webDriver, WebDriverWait webDriverWait){}
-
-    private WebDriverKit setupWebDriverKit() {
+    private WebDriverKit createWebDriverKit() {
         WebDriverManager.chromedriver().setup();
-        WebDriver driver = new ChromeDriver();
-        WebDriverWait webDriverWait = new WebDriverWait(driver, Duration.ofSeconds(10));
-        return new WebDriverKit(driver, webDriverWait);
+        ChromeOptions options = new ChromeOptions();
+        options.addArguments("--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage");
+
+        WebDriver driver = new ChromeDriver(options);
+        WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(20));
+
+        WebDriverKit kit = new WebDriverKit(driver, wait);
+        allDrivers.add(kit);
+        return kit;
     }
 
-
-    private Restaraunt parseExpirenzaMenuRestaurantFromUrl(String baseUrl) throws InvalidParseException {
+    private Restaurant scrapeRestaurantData(WebDriverKit kit, String baseUrl) throws InvalidParseException {
         try {
-            webDriverKit.webDriver.get(baseUrl);
-            parseRestaurantForDishes();
-        } catch (WebDriverException exception) {
-            System.err.println("An error occurred during the Selenium execution.");
-            exception.printStackTrace();
-        } finally {
-            if (webDriverKit.webDriver != null) webDriverKit.webDriver.quit();
-        }
+            kit.webDriver.get(baseUrl);
+            Restaurant.RestaurantBuilder restaurantBuilder = Restaurant.builder();
+            List<Dish> dishes = new ArrayList<>();
 
-        restarauntBuilder.dishes(dishList);
-        return restarauntBuilder.build();
-    }
+            String restaurantName = scrapeRestaurantName(kit);
+            restaurantBuilder.name(restaurantName);
 
-
-    private void parseRestaurantForDishes() throws InvalidParseException {
-        parseAndSetRestaurantName();
-        List<WebElement> menuLinks = findMenuLinksElements();
-        List<PageCategory> categories = getCategoriesFromMenuLinks(menuLinks);
-
-        if (categories.isEmpty()) throw new InvalidParseException("Categories are empty");
-        for (PageCategory pageCategory : categories) {
-            parseDishesFromPageCategory(pageCategory);
-        }
-    }
-
-    private void parseAndSetRestaurantName() {
-        By restaurantTitle = By.cssSelector("h2.title");
-        webDriverKit.webDriverWait.until(ExpectedConditions.visibilityOfElementLocated(restaurantTitle));
-        WebElement element = webDriverKit.webDriver.findElement(restaurantTitle);
-
-        restarauntBuilder.name(element.getText().trim());
-    }
-
-    private List<WebElement> findMenuLinksElements() {
-        By menuLinkSelector = By.cssSelector("a.main-menu-item");
-        webDriverKit.webDriverWait.until(ExpectedConditions.visibilityOfElementLocated(menuLinkSelector));
-
-        return webDriverKit.webDriver.findElements(menuLinkSelector);
-    }
-
-    private List<PageCategory> getCategoriesFromMenuLinks(List<WebElement> menuLinks) {
-        List<PageCategory> categories = new ArrayList<>();
-        for (WebElement link : menuLinks) {
-            String name = link.getText().trim();
-            String href = link.getAttribute("href");
-            categories.add(new PageCategory(name, href));
-        }
-
-        return categories;
-    }
-
-    private void parseDishesFromPageCategory(PageCategory pageCategory) {
-        String mainCategory = pageCategory.name();
-        String categoryUrl = pageCategory.link();
-        Document categoryDocument = getCategoryHTMLDocument(categoryUrl);
-        Elements subCategoryElements = categoryDocument.select("h2.dish-list--title");
-
-        if (subCategoryElements.isEmpty()) {
-            addDishesToDishList(categoryDocument.select("div.menu-list-item"), mainCategory, null);
-        } else {
-            addDishesFromCategoryToDishList(mainCategory, subCategoryElements);
-        }
-    }
-
-    private Document getCategoryHTMLDocument(String categoryUrl) {
-        webDriverKit.webDriver.get(categoryUrl);
-
-        By dishSelector = By.cssSelector("div.menu-list-item");
-        webDriverKit.webDriverWait.until(ExpectedConditions.presenceOfAllElementsLocatedBy(dishSelector));
-
-        String pageSource = webDriverKit.webDriver.getPageSource();
-        return Jsoup.parse(pageSource);
-    }
-
-    private void addDishesFromCategoryToDishList(String mainCategory, Elements subCategoryElements) {
-        for (Element subCategoryElement : subCategoryElements) {
-            String subCategory = subCategoryElement.text().trim();
-            Element nextElementAfterSubCategory = subCategoryElement.nextElementSibling();
-            List<Element> dishElements = new ArrayList<>();
-
-            while (isNotSubCategoryElement(nextElementAfterSubCategory)) {
-                dishElements.addAll(nextElementAfterSubCategory.select("div.menu-list-item"));
-                nextElementAfterSubCategory = nextElementAfterSubCategory.nextElementSibling();
+            List<PageCategory> categories = scrapeMenuCategories(kit);
+            if (categories.isEmpty()) {
+                throw new InvalidParseException("No menu categories found for URL: " + baseUrl);
             }
 
-            addDishesToDishList(new Elements(dishElements), mainCategory, subCategory);
+            for (PageCategory category : categories) {
+                dishes.addAll(scrapeDishesFromCategoryPage(kit, category));
+            }
+
+            return restaurantBuilder.dishes(dishes).build();
+        } catch (WebDriverException e) {
+            throw new InvalidParseException("A WebDriver error occurred while parsing " + baseUrl);
         }
     }
 
-    private boolean isNotSubCategoryElement(Element element) {
-        return element != null && !element.tagName().equals("h2") && !element.hasClass("dish-list--title");
+    private String scrapeRestaurantName(WebDriverKit kit) {
+        By titleSelector = By.cssSelector("h2.title");
+        kit.webDriverWait.until(ExpectedConditions.visibilityOfElementLocated(titleSelector));
+        return kit.webDriver.findElement(titleSelector).getText().trim();
     }
 
-    private void addDishesToDishList(Elements dishElements, String mainCategory, String subCategory) {
+    private List<PageCategory> scrapeMenuCategories(WebDriverKit kit) {
+        By menuLinkSelector = By.cssSelector("a.main-menu-item");
+        kit.webDriverWait.until(ExpectedConditions.visibilityOfElementLocated(menuLinkSelector));
+
+        return kit.webDriver.findElements(menuLinkSelector).stream()
+                .map(link -> new PageCategory(link.getText().trim(), link.getAttribute("href")))
+                .collect(Collectors.toList());
+    }
+
+    private List<Dish> scrapeDishesFromCategoryPage(WebDriverKit kit, PageCategory category) {
+        kit.webDriver.get(category.url());
+        kit.webDriverWait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector("div.menu-list-item")));
+
+        Document page = Jsoup.parse(kit.webDriver.getPageSource());
+        Elements subCategoryTitles = page.select("h2.dish-list--title");
+
+        if (subCategoryTitles.isEmpty()) {
+            return extractDishesFromElements(page.select("div.menu-list-item"), category.name(), null);
+        }
+
+        List<Dish> dishes = new ArrayList<>();
+        for (Element titleElement : subCategoryTitles) {
+            String subCategoryName = titleElement.text().trim();
+            Elements dishElements = new Elements();
+            Element nextSibling = titleElement.nextElementSibling();
+
+            // Collect all sibling elements until the next subcategory title
+            while (nextSibling != null && !nextSibling.is("h2.dish-list--title")) {
+                dishElements.addAll(nextSibling.select("div.menu-list-item"));
+                nextSibling = nextSibling.nextElementSibling();
+            }
+            dishes.addAll(extractDishesFromElements(dishElements, category.name(), subCategoryName));
+        }
+        return dishes;
+    }
+
+    private List<Dish> extractDishesFromElements(Elements dishElements, String mainCategory, String subCategory) {
+        List<Dish> dishes = new ArrayList<>();
         for (Element dishElement : dishElements) {
-            Element nameElement = dishElement.selectFirst("h4.item-title");
-            String name = nameElement != null ? nameElement.text().trim() : "NO NAME";
-
-            Element descElement = dishElement.selectFirst("div.item-description p");
-            String description = descElement != null ? descElement.text().trim() : "NO DESCRIPTION";
-
-            Element priceElement = dishElement.selectFirst("div.price");
-            String priceStr = priceElement != null ? priceElement.text().trim() : "NO PRICE";
-            BigDecimal price = parsePrice(priceStr);
+            String name = Optional.ofNullable(dishElement.selectFirst("h4.item-title")).map(Element::text).orElse("").trim();
+            String description = Optional.ofNullable(dishElement.selectFirst("div.item-description p")).map(Element::text).orElse("").trim();
+            String priceStr = Optional.ofNullable(dishElement.selectFirst("div.price")).map(Element::text).orElse("0").trim();
 
             DishCategory dishCategory = DishCategory.builder()
                     .category(mainCategory)
                     .subCategory(subCategory)
                     .build();
 
-            Dish dish = Dish.builder()
+            dishes.add(Dish.builder()
                     .name(name)
                     .dishCategory(dishCategory)
                     .description(description)
-                    .price(price)
-                    .build();
-
-            dishList.add(dish);
+                    .price(parsePrice(priceStr))
+                    .build());
         }
+        return dishes;
     }
 
     private BigDecimal parsePrice(String priceString) {
-        if (isInvalidPrice(priceString)) return BigDecimal.ZERO;
-
-        return getBigDecimalPriceFromString(priceString);
-    }
-
-    private boolean isInvalidPrice(String priceString) {
-        return priceString == null || priceString.isEmpty();
-    }
-
-    private BigDecimal getBigDecimalPriceFromString(String priceString) {
-        String validatedPriceString = priceString.replaceAll("[^\\d\\.]", "");
+        if (priceString == null || priceString.isEmpty()) return BigDecimal.ZERO;
         try {
-            return new BigDecimal(validatedPriceString);
+            String sanitizedPrice = priceString.replaceAll("[^\\d.]", "");
+            return new BigDecimal(sanitizedPrice);
         } catch (NumberFormatException e) {
             return BigDecimal.ZERO;
         }
