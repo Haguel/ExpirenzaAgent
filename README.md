@@ -16,7 +16,7 @@ To set up and run the Expirenza Agent, you'll need to have Java 21 and Maven ins
 2.  **Configure Google Sheets API access:**
     * Follow the Google Cloud documentation to create a service account and download the JSON key file.
     * Place the downloaded `service-account-key.json` file in the `src/main/resources` directory.
-    * In the `src/main/resources/application-dev.properties` file, update the `google.sheets.spreadsheetId` with your Google Sheet ID.
+    * In the `src/main/resources/application-test.properties` file, update the `google.sheets.spreadsheetId` with your Google Sheet ID.
     * Give Editor role to your service account in the Google Spreadsheet 
 3.  **Build and run the application:**
     * You can run the application using the Maven wrapper included in the project:
@@ -50,9 +50,9 @@ The application's configuration is managed through property files located in `sr
 
 * `application.properties`:
     * `spring.application.name`: Sets the application name.
-    * `spring.profiles.active`: Defines the active Spring profile (e.g., `dev`).
+    * `spring.profiles.active`: Defines the active Spring profile (e.g., `test`).
 
-* `application-dev.properties` (or other profile-specific files):
+* `application-test.properties` (or other profile-specific files):
     * `google.sheets.spreadsheetId`: The ID of the Google Sheet where data will be exported.
     * `google.sheets.serviceAccountKeyPath`: The path to the Google service account key file.
 
