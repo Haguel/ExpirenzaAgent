@@ -78,6 +78,7 @@ public class ExpirenzaMenuDishesExporter implements DataExporter<Restaurant> {
                 newRows.add(rowData);
             }
         }
+
         return new PartitionedDishes(updates, newRows);
     }
 
@@ -136,6 +137,7 @@ public class ExpirenzaMenuDishesExporter implements DataExporter<Restaurant> {
         String name = dish.getName() != null ? dish.getName() : "";
         String desc = dish.getDescription() != null ? dish.getDescription() : "";
         String price = dish.getPrice() != null ? dish.getPrice().toPlainString() : "0";
+        
         return List.of(cat, sub, name, desc, price);
     }
 
